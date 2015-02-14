@@ -17,19 +17,25 @@ if(!file_exists(CONFIG_FILE)) {
 $config = Spyc::YAMLLoad(CONFIG_FILE);
 
 # connect to db
-$db = mysql_connect($config['db']['host'],$config['db']['username'],$config['db']['password']);
-$result = mysql_select_db($config['db']['database']);
+try {
+    $db = new PDO($config['db']['dsn'], $config['db']['username'], $config['db']['password'] );
+}
+catch(PDOException $e)
+{
+	echo $e->getMessage();
+	die();
+}
 
 # print summary info
 print("Starting eplite export (v".VERSION.")\n");
-$results = mysql_query("SELECT count(*) as total FROM store");
-$row = mysql_fetch_assoc($results);
-$total = $row['total'];
+$results = $db->query("SELECT count(*) as total FROM store");
+$row = $results->fetch(PDO::FETCH_NUM);
+$total = $row[0];
 print("  Found $total rows in the store\n");
-$results = mysql_query("SELECT count(*) as total FROM  `store` ".
+$results = $db->query("SELECT count(*) as total FROM  `store` ".
     "WHERE  `key` NOT LIKE  '%:revs:%' AND  `key` LIKE  'pad:%' AND `key` NOT LIKE  '%:chat:%'");
-$row = mysql_fetch_assoc($results);
-$total = $row['total'];
+$row = $results->fetch(PDO::FETCH_NUM);
+$total = $row[0];
 print("  Found $total unique pads in the store\n");
 
 # helper function - start an html file
@@ -74,12 +80,36 @@ start_html_file($server_toc, "Live Table Of Contents");
 fwrite($server_toc,"<h1>Live Table of Contents</h1>");
 fwrite($server_toc,"<ul>\n");
 
+
+// replace linkify links: [[text]] to [[<a href='text.html'>text</a>]]
+$linkify_replace = function ($matches) use ($db){
+	// create an id form the link text:
+	$url = str_replace(' ', '_', $matches[1]);
+	$url = preg_replace('/\s+/', '_', $matches[1]);
+	// fixes that links only seem to go until the #-character:
+	$url = strpos($url, '#') !== false ? substr($url, 0, strpos($url, '#')) : $url;
+	
+	// check if exists:
+	$q = $db->prepare("SELECT COUNT(*) FROM  `store` WHERE  `key` =  ?");
+	$q->execute(array('pad:'.$url));
+	$result = $q->fetch(PDO::FETCH_NUM);
+	$exists = (bool) $result[0];
+
+	// escape for definitive filename:
+	$url = preg_replace('/[^(\x20-\x7F)]*/','', $url).".html";
+	if($exists)
+		return '[[<a href="'.$url.'">'.$matches[1].'</a>]]';
+	else
+		return '[[<a href="#" style="color:#990000">'.$matches[1].'</a>]]';
+};
+
 # go through all the pad master entries, saving the content of each
-$results = mysql_query("SELECT * FROM  `store` WHERE  `key` NOT LIKE  '%:revs:%' AND  `key` LIKE  'pad:%' AND `key` NOT LIKE  '%:chat:%' ORDER BY `key`");
-while ($row = mysql_fetch_assoc($results)) {
+$results = $db->query("SELECT * FROM  `store` WHERE  `key` NOT LIKE  '%:revs:%' AND  `key` LIKE  'pad:%' AND `key` NOT LIKE  '%:chat:%' ORDER BY `key`");
+foreach($results as $row){
   $title = str_replace("pad:","",$row['key']);
   $pad_value = json_decode($row['value']);
   $contents = $pad_value->atext->text;
+  $contents = preg_replace_callback('/\[\[(.*?)\]\]/', $linkify_replace, $contents);
   # http://www.stemkoski.com/php-remove-non-ascii-characters-from-a-string/
   $filename = preg_replace('/[^(\x20-\x7F)]*/','', $title).".html";
   # add an item to the table of contents
@@ -103,6 +133,7 @@ end_html_file($index);
 end_html_file($server_toc);
 fclose($index);
 fclose($server_toc);
-mysql_close($db);
+// close connection:
+$db = null;
 
 print("Done\n");

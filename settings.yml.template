@@ -13,6 +13,7 @@ db:
     username: eplite
     password: eplite
     database: eplite
+    dsn: 'sqlite:var/etherpad.db'
 
 # do you want the exported folder to be timestamped?
 timestamp: true
